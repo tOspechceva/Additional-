@@ -11,6 +11,7 @@ import java.time.LocalDate;
  * @param testResult результат теста
  */
 public record LessonProgress(long userId, long lessonId, LocalDate completionDate, int testResult) {
+    /** Урок считается завершенным, если в записи есть {@code completionDate}. */
     public boolean isCompleted() {
         return completionDate != null;
     }
