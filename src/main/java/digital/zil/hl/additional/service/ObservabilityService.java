@@ -8,24 +8,44 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicReference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 /**
- * Accumulates recent operation statistics in rolling time windows.
+ * Накопление статистики по операциям в скользящих окнах времени (LAB9).
+ * <p>
+ * Окна задаются параметром {@code observability.windows} (например {@code 10s,30s,1m}).
+ * Метод {@link #refresh()} вызывается по расписанию и пересчитывает снимки; при включённом логировании
+ * пишет компактную сводку в лог приложения.
  */
 @Service
 public class ObservabilityService {
+
+    private static final Logger log = LoggerFactory.getLogger(ObservabilityService.class);
+
     private final ConcurrentLinkedQueue<TimedEvent> events = new ConcurrentLinkedQueue<>();
     private final List<WindowConfig> windows;
     private final AtomicReference<Map<String, Map<String, OperationStats>>> snapshots;
     private final long maxWindowMs;
+    private final boolean logOnRefresh;
+    private final boolean logEmptySnapshots;
+    private final String applicationName;
 
-    public ObservabilityService(@Value("${observability.windows:10s,30s,1m}") final String windowsConfig) {
+    public ObservabilityService(
+            @Value("${observability.windows:10s,30s,1m}") final String windowsConfig,
+            @Value("${observability.log-on-refresh:true}") final boolean logOnRefresh,
+            @Value("${observability.log-empty-snapshots:false}") final boolean logEmptySnapshots,
+            @Value("${spring.application.name:additional-service}") final String applicationName
+    ) {
         this.windows = parseWindows(windowsConfig);
         this.maxWindowMs = this.windows.stream().mapToLong(WindowConfig::windowMs).max().orElse(1000L);
         this.snapshots = new AtomicReference<>(emptySnapshot(this.windows));
+        this.logOnRefresh = logOnRefresh;
+        this.logEmptySnapshots = logEmptySnapshots;
+        this.applicationName = Objects.requireNonNullElse(applicationName, "application");
     }
 
     public void recordSuccess(final String operation, final long durationNanos) {
@@ -62,6 +82,61 @@ public class ObservabilityService {
             computed.put(window.label(), aggregateForWindow(current, now, window.windowMs()));
         }
         snapshots.set(computed);
+        maybeLogSnapshot(computed);
+    }
+
+    private void maybeLogSnapshot(final Map<String, Map<String, OperationStats>> computed) {
+        if (!logOnRefresh || !log.isInfoEnabled()) {
+            return;
+        }
+        if (!logEmptySnapshots && isSnapshotEmpty(computed)) {
+            return;
+        }
+        log.info("[{}] observability refresh: {}", applicationName, formatSnapshotForLog(computed));
+    }
+
+    private static boolean isSnapshotEmpty(final Map<String, Map<String, OperationStats>> snapshot) {
+        for (Map<String, OperationStats> perWindow : snapshot.values()) {
+            for (OperationStats st : perWindow.values()) {
+                if (st.count() > 0) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private static String formatSnapshotForLog(final Map<String, Map<String, OperationStats>> snapshot) {
+        final StringBuilder sb = new StringBuilder(512);
+        for (Map.Entry<String, Map<String, OperationStats>> w : snapshot.entrySet()) {
+            if (sb.length() > 0) {
+                sb.append(" | ");
+            }
+            sb.append(w.getKey()).append(":[");
+            final Map<String, OperationStats> ops = w.getValue();
+            if (ops.isEmpty()) {
+                sb.append("empty");
+            } else {
+                boolean first = true;
+                for (Map.Entry<String, OperationStats> e : ops.entrySet()) {
+                    if (!first) {
+                        sb.append("; ");
+                    }
+                    first = false;
+                    final OperationStats s = e.getValue();
+                    sb.append(e.getKey())
+                            .append("{n=").append(s.count())
+                            .append(",err=").append(s.errors())
+                            .append(",avgMs=").append(String.format(java.util.Locale.ROOT, "%.2f", s.avgMs()))
+                            .append(",minMs=").append(String.format(java.util.Locale.ROOT, "%.2f", s.minMs()))
+                            .append(",maxMs=").append(String.format(java.util.Locale.ROOT, "%.2f", s.maxMs()))
+                            .append(",rps=").append(String.format(java.util.Locale.ROOT, "%.2f", s.rps()))
+                            .append('}');
+                }
+            }
+            sb.append(']');
+        }
+        return sb.toString();
     }
 
     private static Map<String, OperationStats> aggregateForWindow(
