@@ -2,6 +2,8 @@ package digital.zil.hl.additional.service;
 
 import digital.zil.hl.additional.client.CrudApiClient;
 import digital.zil.hl.additional.client.CrudResponseMapper;
+import digital.zil.hl.additional.client.dto.CrudLessonResponse;
+import digital.zil.hl.additional.client.dto.CrudUserResponse;
 import digital.zil.hl.additional.model.LessonProgress;
 import digital.zil.hl.additional.model.User;
 import java.util.LinkedHashMap;
@@ -136,6 +138,33 @@ public class AdditionalProgressService {
         });
     }
 
+    /**
+     * Намеренно неоптимальный расчёт для учебной демонстрации N+1.
+     * <p>
+     * На каждую запись прогресса выполняются отдельные S2S вызовы:
+     * {@code GET /api/users/{id}} и {@code GET /api/lessons/{id}}.
+     */
+    public List<NPlusOneProgressView> calculateProgressWithNPlusOneLookups() {
+        return timedCalc("calc:additional:n-plus-one-progress", () -> {
+            final List<LessonProgress> allProgress = crudResponseMapper.toProgressEntries(crudApiClient.getProgressBody());
+            return allProgress.stream()
+                    .map(progress -> {
+                        final CrudUserResponse userBody = requireNonNullBody(
+                                crudApiClient.getUserByIdBody(progress.userId()),
+                                "CRUD /api/users/{id} вернул пустое тело (null) для userId=" + progress.userId()
+                        );
+                        final CrudLessonResponse lessonBody = requireNonNullBody(
+                                crudApiClient.getLessonByIdBody(progress.lessonId()),
+                                "CRUD /api/lessons/{id} вернул пустое тело (null) для lessonId=" + progress.lessonId()
+                        );
+
+                        final User user = new User(userBody.id(), userBody.login(), userBody.email());
+                        return new NPlusOneProgressView(user, lessonBody.topic(), progress);
+                    })
+                    .toList();
+        });
+    }
+
     private <T> T timedCalc(final String operation, final Supplier<T> supplier) {
         final long started = System.nanoTime();
         try {
@@ -148,6 +177,13 @@ public class AdditionalProgressService {
         }
     }
 
+    private static <T> T requireNonNullBody(final T body, final String message) {
+        if (body == null) {
+            throw new IllegalStateException(message);
+        }
+        return body;
+    }
+
 
     public record UserProgressView(User user, double progressPercent) {
         // Record автоматически реализует:
@@ -155,5 +191,8 @@ public class AdditionalProgressService {
         // - геттеры user() и progressPercent()
         // - equals/hashCode по всем полям
         // - toString в формате UserProgressView[user=..., progressPercent=...]
+    }
+
+    public record NPlusOneProgressView(User user, String lessonTopic, LessonProgress progress) {
     }
 }
