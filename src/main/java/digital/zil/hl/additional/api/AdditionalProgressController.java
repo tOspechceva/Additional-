@@ -1,7 +1,6 @@
 package digital.zil.hl.additional.api;
 
 import digital.zil.hl.additional.api.dto.UserProgressResponse;
-import digital.zil.hl.additional.api.dto.NPlusOneProgressResponse;
 import digital.zil.hl.additional.model.User;
 import digital.zil.hl.additional.service.AdditionalProgressService;
 import digital.zil.hl.additional.service.ObservabilityService;
@@ -88,31 +87,6 @@ public class AdditionalProgressController {
                     ))
                     .toList();
         });
-    }
-
-    /**
-     * Демонстрационный endpoint с намеренно "плохой" N+1 логикой.
-     * <p>
-     * Для каждой строки из общего прогресса отдельно запрашивает:
-     * <ul>
-     *   <li>пользователя по userId</li>
-     *   <li>урок по lessonId</li>
-     * </ul>
-     */
-    @GetMapping("/n-plus-one")
-    public List<NPlusOneProgressResponse> getAllProgressWithNPlusOneLookups() {
-        return timed("controller:getAllProgressWithNPlusOneLookups", () -> additionalProgressService
-                .calculateProgressWithNPlusOneLookups()
-                .stream()
-                .map(view -> new NPlusOneProgressResponse(
-                        view.user().id(),
-                        view.user().login(),
-                        view.progress().lessonId(),
-                        view.lessonTopic(),
-                        view.progress().completionDate(),
-                        view.progress().testResult()
-                ))
-                .toList());
     }
 
     private <T> T timed(final String operation, final Supplier<T> supplier) {

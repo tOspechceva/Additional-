@@ -73,15 +73,6 @@ public class CrudApiClient {
         ).getBody());
     }
 
-    public CrudLessonResponse getLessonByIdBody(final long lessonId) {
-        return timedS2s("s2s:crud:get-lesson-by-id", () -> restTemplate.exchange(
-                baseUrl + "/api/lessons/" + lessonId,
-                HttpMethod.GET,
-                null,
-                CrudLessonResponse.class
-        ).getBody());
-    }
-
     public static RestTemplate buildRestTemplate(final int connectTimeoutMs, final int readTimeoutMs) {
         final SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(connectTimeoutMs);

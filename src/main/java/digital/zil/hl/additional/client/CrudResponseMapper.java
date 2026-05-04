@@ -6,6 +6,7 @@ import digital.zil.hl.additional.client.dto.CrudUserResponse;
 import digital.zil.hl.additional.model.LessonProgress;
 import digital.zil.hl.additional.model.User;
 import java.util.List;
+import java.util.Objects;
 import org.springframework.stereotype.Component;
 
 /**
@@ -14,10 +15,15 @@ import org.springframework.stereotype.Component;
 @Component
 public class CrudResponseMapper {
 
+    public User toUser(final CrudUserResponse user) {
+        Objects.requireNonNull(user, "CRUD user body не может быть null");
+        return new User(user.id(), user.login(), user.email());
+    }
+
     public List<User> toUsers(final List<CrudUserResponse> body) {
         requireNonEmptyBody(body, "CRUD /api/users вернул пустое тело (null)");
         return body.stream()
-                .map(user -> new User(user.id(), user.login(), user.email()))
+                .map(this::toUser)
                 .toList();
     }
 

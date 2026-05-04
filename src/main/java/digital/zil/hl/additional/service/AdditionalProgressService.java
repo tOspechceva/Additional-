@@ -2,8 +2,6 @@ package digital.zil.hl.additional.service;
 
 import digital.zil.hl.additional.client.CrudApiClient;
 import digital.zil.hl.additional.client.CrudResponseMapper;
-import digital.zil.hl.additional.client.dto.CrudLessonResponse;
-import digital.zil.hl.additional.client.dto.CrudUserResponse;
 import digital.zil.hl.additional.model.LessonProgress;
 import digital.zil.hl.additional.model.User;
 import java.util.LinkedHashMap;
@@ -12,7 +10,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Supplier;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
 
 /**
  * Бизнес-сервис для расчёта прогресса прохождения курса в процентах.
@@ -28,6 +28,7 @@ public class AdditionalProgressService {
     /** Стратегия расчёта процента прогресса (вынесена для тестируемости и расширяемости). */
     private final ProgressCalculator progressCalculator;
     private final ObservabilityService observabilityService;
+    private final UserCacheService userCacheService;
 
     /**
      * Конструктор с обязательными зависимостями (Constructor Injection).
@@ -40,7 +41,8 @@ public class AdditionalProgressService {
             final CrudApiClient crudApiClient,
             final CrudResponseMapper crudResponseMapper,
             final ProgressCalculator progressCalculator,
-            final ObservabilityService observabilityService
+            final ObservabilityService observabilityService,
+            final UserCacheService userCacheService
     ) {
         // Defensive programming: лучше упасть сразу при создании бина,
         // чем получить NPE в рантайме при обработке запроса
@@ -48,6 +50,7 @@ public class AdditionalProgressService {
         this.crudResponseMapper = Objects.requireNonNull(crudResponseMapper, "crudResponseMapper не может быть null");
         this.progressCalculator = Objects.requireNonNull(progressCalculator, "progressCalculator не может быть null");
         this.observabilityService = Objects.requireNonNull(observabilityService, "observabilityService не может быть null");
+        this.userCacheService = Objects.requireNonNull(userCacheService, "userCacheService не может быть null");
     }
 
     /**
@@ -55,9 +58,8 @@ public class AdditionalProgressService {
      * <p>
      * <b>Алгоритм работы:</b>
      * <ol>
-     *     <li>Загружаем всех пользователей из CRUD-сервиса;</li>
-     *     <li>Проверяем, что пользователь с указанным {@code userId} существует
-     *         (если нет — выбрасываем {@link IllegalArgumentException});</li>
+     *     <li>Берём пользователя из in-memory кеша или {@code GET /api/users/{id}} (LAB10);</li>
+     *     <li>Если CRUD отвечает 404 — выбрасываем {@link IllegalArgumentException};</li>
      *     <li>Получаем общее количество уроков (знаменатель для расчёта процента);</li>
      *     <li>Загружаем все записи прогресса и фильтруем только по целевому пользователю;</li>
      *     <li>Делегируем расчёт процента стратегии {@link ProgressCalculator}.</li>
@@ -70,11 +72,14 @@ public class AdditionalProgressService {
      */
     public double calculateUserProgressPercent(final long userId) {
         return timedCalc("calc:additional:user-progress", () -> {
-            final List<User> users = crudResponseMapper.toUsers(crudApiClient.getUsersBody());
-            users.stream()
-                    .filter(user -> user.id() == userId)
-                    .findFirst()
-                    .orElseThrow(() -> new IllegalArgumentException("Пользователь не найден: " + userId));
+            try {
+                userCacheService.getUserById(userId);
+            } catch (HttpClientErrorException ex) {
+                if (ex.getStatusCode().isSameCodeAs(HttpStatus.NOT_FOUND)) {
+                    throw new IllegalArgumentException("Пользователь не найден: " + userId, ex);
+                }
+                throw ex;
+            }
             final int allLessonsCount = crudResponseMapper.toLessonsCount(crudApiClient.getLessonsBody());
             final List<LessonProgress> userProgress = crudResponseMapper.toProgressEntries(crudApiClient.getProgressBody()).stream()
                     .filter(progress -> progress.userId() == userId)
@@ -107,7 +112,7 @@ public class AdditionalProgressService {
      * <p>
      * <b>Алгоритм:</b>
      * <ol>
-     *     <li>Загружаем список всех пользователей;</li>
+     *     <li>Загружаем список всех пользователей и обновляем кеш пользователей (LAB10);</li>
      *     <li>Получаем общее количество уроков (единое для всех);</li>
      *     <li>Загружаем все записи прогресса;</li>
      *     <li>Для каждого пользователя:</li>
@@ -124,6 +129,7 @@ public class AdditionalProgressService {
     public Map<User, Double> calculateAllUsersProgressPercent() {
         return timedCalc("calc:additional:all-users-progress", () -> {
             final List<User> users = crudResponseMapper.toUsers(crudApiClient.getUsersBody());
+            userCacheService.warmAll(users);
             final int allLessonsCount = crudResponseMapper.toLessonsCount(crudApiClient.getLessonsBody());
             final List<LessonProgress> allProgress = crudResponseMapper.toProgressEntries(crudApiClient.getProgressBody());
             final Map<User, Double> progressByUser = new LinkedHashMap<>();
@@ -135,33 +141,6 @@ public class AdditionalProgressService {
                 progressByUser.put(user, progressPercent);
             }
             return progressByUser;
-        });
-    }
-
-    /**
-     * Намеренно неоптимальный расчёт для учебной демонстрации N+1.
-     * <p>
-     * На каждую запись прогресса выполняются отдельные S2S вызовы:
-     * {@code GET /api/users/{id}} и {@code GET /api/lessons/{id}}.
-     */
-    public List<NPlusOneProgressView> calculateProgressWithNPlusOneLookups() {
-        return timedCalc("calc:additional:n-plus-one-progress", () -> {
-            final List<LessonProgress> allProgress = crudResponseMapper.toProgressEntries(crudApiClient.getProgressBody());
-            return allProgress.stream()
-                    .map(progress -> {
-                        final CrudUserResponse userBody = requireNonNullBody(
-                                crudApiClient.getUserByIdBody(progress.userId()),
-                                "CRUD /api/users/{id} вернул пустое тело (null) для userId=" + progress.userId()
-                        );
-                        final CrudLessonResponse lessonBody = requireNonNullBody(
-                                crudApiClient.getLessonByIdBody(progress.lessonId()),
-                                "CRUD /api/lessons/{id} вернул пустое тело (null) для lessonId=" + progress.lessonId()
-                        );
-
-                        final User user = new User(userBody.id(), userBody.login(), userBody.email());
-                        return new NPlusOneProgressView(user, lessonBody.topic(), progress);
-                    })
-                    .toList();
         });
     }
 
@@ -177,22 +156,11 @@ public class AdditionalProgressService {
         }
     }
 
-    private static <T> T requireNonNullBody(final T body, final String message) {
-        if (body == null) {
-            throw new IllegalStateException(message);
-        }
-        return body;
-    }
-
-
     public record UserProgressView(User user, double progressPercent) {
         // Record автоматически реализует:
         // - конструктор с параметрами
         // - геттеры user() и progressPercent()
         // - equals/hashCode по всем полям
         // - toString в формате UserProgressView[user=..., progressPercent=...]
-    }
-
-    public record NPlusOneProgressView(User user, String lessonTopic, LessonProgress progress) {
     }
 }
