@@ -129,7 +129,7 @@ public class AdditionalProgressService {
     public Map<User, Double> calculateAllUsersProgressPercent() {
         return timedCalc("calc:additional:all-users-progress", () -> {
             final List<User> users = crudResponseMapper.toUsers(crudApiClient.getUsersBody());
-            userCacheService.warmAll(users);
+            userCacheService.preheatFromBulkUserSnapshot(users);
             final int allLessonsCount = crudResponseMapper.toLessonsCount(crudApiClient.getLessonsBody());
             final List<LessonProgress> allProgress = crudResponseMapper.toProgressEntries(crudApiClient.getProgressBody());
             final Map<User, Double> progressByUser = new LinkedHashMap<>();
