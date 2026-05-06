@@ -3,6 +3,7 @@ package digital.zil.hl.additional.client;
 import digital.zil.hl.additional.client.dto.CrudLessonProgressResponse;
 import digital.zil.hl.additional.client.dto.CrudLessonResponse;
 import digital.zil.hl.additional.client.dto.CrudUserResponse;
+import digital.zil.hl.additional.resilience.Lab16ResilienceExecutor;
 import digital.zil.hl.additional.service.ObservabilityService;
 import java.util.List;
 import java.util.Objects;
@@ -23,14 +24,18 @@ public class CrudApiClient {
     private final RestTemplate restTemplate;
     private final String baseUrl;
     private final ObservabilityService observabilityService;
+    private final Lab16ResilienceExecutor lab16ResilienceExecutor;
 
     public CrudApiClient(
             final RestTemplate restTemplate,
             final ObservabilityService observabilityService,
+            final Lab16ResilienceExecutor lab16ResilienceExecutor,
             @Value("${app.crud.base-url}") final String baseUrl
     ) {
         this.restTemplate = Objects.requireNonNull(restTemplate, "RestTemplate не может быть null");
         this.observabilityService = Objects.requireNonNull(observabilityService, "observabilityService не может быть null");
+        this.lab16ResilienceExecutor =
+                Objects.requireNonNull(lab16ResilienceExecutor, "lab16ResilienceExecutor не может быть null");
         this.baseUrl = Objects.requireNonNull(baseUrl, "baseUrl не может быть null");
     }
 
@@ -83,7 +88,7 @@ public class CrudApiClient {
     private <T> T timedS2s(final String operation, final Supplier<T> supplier) {
         final long started = System.nanoTime();
         try {
-            final T result = supplier.get();
+            final T result = lab16ResilienceExecutor.execute(supplier);
             observabilityService.recordSuccess(operation, System.nanoTime() - started);
             return result;
         } catch (RuntimeException ex) {
