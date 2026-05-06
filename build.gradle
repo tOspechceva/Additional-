@@ -29,7 +29,12 @@ repositories {
 }
 
 dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+    runtimeOnly 'org.postgresql:postgresql'
+    runtimeOnly 'com.h2database:h2'
+    implementation 'org.apache.kafka:kafka-clients'
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.8'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
 }
